@@ -208,7 +208,10 @@ if not ACCESS_TOKEN or not USER_ID:
     exit(1)
 
 if is_rest_day_jp():
-    exit(0)
+    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
+        print("🔧 手動実行のため休み判定をスキップして投稿します")
+    else:
+        exit(0)
 
 text = generate_post()
 print(f"📝 投稿文 ({len(text)}文字):\n{text}\n")
