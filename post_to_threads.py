@@ -101,8 +101,8 @@ def generate_post():
 
 【冒頭フレーズの位置】
 冒頭フレーズ「{opening}」は必ず投稿の最初に配置すること。例：
-- 「関西の人で」+ 「ヘッドスパ受けたい人いませんかー？🙋‍♀️」のように繋げる
-- 「📍京都河原町駅から徒歩5分」+ 「70分3,980円で癒します🥰」のように繋げる
+- 「関西の人で」+ 「ヘッドスパ受けたい人いませんかー？🙋‍♀️」のように繋ける
+- 「📍京都河原町駅から徒歩5分」+ 「70分3,980円で癒します🥰」のように繋ける
 - 「京都河原町で」+ 「寝落ちしませんか🐑💤」のように繋げる
 
 【参考にする過去の実投稿（冒頭フレーズを付けたバージョン）】
@@ -145,11 +145,16 @@ def post_to_threads(text, media_url=None, media_type=None):
 
     r = requests.post(f"https://graph.threads.net/v1.0/{USER_ID}/threads", params=params)
     if r.status_code != 200:
-        print(f"❌ コンテナ作成失敗: {r.text}")
-        if media_type:
+        print(f"CREATE_MEDIA_FAILED: {r.text}")
+        if not media_type:
+            return r
+        print("⏳ 10秒後に1回リトライ")
+        time.sleep(10)
+        r = requests.post(f"https://graph.threads.net/v1.0/{USER_ID}/threads", params=params)
+        if r.status_code != 200:
+            print(f"CREATE_MEDIA_FAILED_RETRY: {r.text}")
             print("📝 テキストのみで再試行")
             return post_to_threads(text, None, None)
-        return r
 
     cid = r.json().get("id")
     print(f"✅ コンテナ作成: {cid}")
