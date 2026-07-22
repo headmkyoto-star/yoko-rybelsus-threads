@@ -1,0 +1,221 @@
+import anthropic, requests, os, random, time
+
+
+# === 過去5日間と同じ動画を使わない仕組み ===
+import json as _json_dedup
+import os as _os_dedup
+import datetime as _dt_dedup
+
+_HISTORY_PATH = "state/used_videos_history.json"
+_HISTORY_KEEP_DAYS = 5
+
+def _load_history():
+    if _os_dedup.path.exists(_HISTORY_PATH):
+        try:
+            return _json_dedup.loads(open(_HISTORY_PATH).read())
+        except Exception:
+            return []
+    return []
+
+def _save_history(history):
+    _os_dedup.makedirs(_os_dedup.path.dirname(_HISTORY_PATH), exist_ok=True)
+    with open(_HISTORY_PATH, "w") as f:
+        _json_dedup.dump(history, f, ensure_ascii=False, indent=2)
+
+def pick_unique_url(all_urls):
+    """過去5日間に使ったURLを除外して選ぶ。全部被ったらリセット。"""
+    history = _load_history()
+    today = _dt_dedup.date.today()
+    cutoff = today - _dt_dedup.timedelta(days=_HISTORY_KEEP_DAYS)
+    recent = [h for h in history if h.get("date", "") > cutoff.isoformat()]
+    used = {(h["url"][0] if isinstance(h["url"], (list, tuple)) else h["url"]) for h in recent}
+    candidates = [u for u in all_urls if u[0] not in used]
+    if not candidates:
+        candidates = all_urls
+    chosen = random.choice(candidates)
+    recent.append({"date": today.isoformat(), "url": chosen[0]})
+    _save_history(recent[-(_HISTORY_KEEP_DAYS + 1):])
+    print(f"[dedup] 選択: {chosen[0]} (除外{len(used)}件/候補{len(candidates)}件)")
+    return chosen
+# === /5日間重複防止 ===
+
+
+ACCESS_TOKEN = os.environ.get("THREADS_ACCESS_TOKEN", "")
+USER_ID = os.environ.get("THREADS_USER_ID", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com/headmkyoto-star/yoko-rybelsus-threads/main/"
+GITHUB_API_BASE = "https://api.github.com/repos/headmkyoto-star/yoko-rybelsus-threads/contents/"
+
+OPENING_PHRASES = [
+    "関西の人で",
+    "📍京都河原町駅から徒歩5分",
+    "四条河原町のすぐ近くで",
+    "京都河原町で",
+    "京都の人で",
+]
+
+MENUS = [
+    "ドライヘッドスパ 70分 3,980円",
+    "アロママッサージ",
+    "小顔矯正コルギ",
+]
+
+def get_media():
+    """動画のみ選択（画像は使わない）"""
+    videos = []
+    try:
+        r = requests.get(GITHUB_API_BASE + "videos")
+        if r.status_code == 200:
+            files = r.json()
+            if isinstance(files, list):
+                for f in files:
+                    name = f["name"].lower()
+                    if name.endswith((".mp4", ".mov")):
+                        url = GITHUB_RAW_BASE + "videos/" + f["name"].replace(" ", "_")
+                        videos.append((url, "VIDEO"))
+    except: pass
+
+    if videos:
+        return pick_unique_url(videos)
+    return None, None
+
+def generate_post():
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    opening = random.choice(OPENING_PHRASES)
+    # メニューは日替わりローテーション（連続で同じメニューにならない）
+    import datetime as _dt
+    _jst_today = (_dt.datetime.utcnow() + _dt.timedelta(hours=9)).date()
+    menu = MENUS[_jst_today.toordinal() % len(MENUS)]
+
+    prompt = f"""京都河原町のリラクゼーションサロン「ようこリベルサス」の若い女性セラピストとして、Threadsの短い営業投稿を作成してください。
+
+【絶対ルール】
+- 投稿は **必ず以下の冒頭フレーズで始める**: 「{opening}」
+- メニューは「{menu}」を訴求する
+- 文字数は40〜70文字
+- 句読点（。、）は使わず、絵文字や改行で区切る
+- ハッシュタグは絶対なし
+- 改行は1〜2回程度
+- 絵文字は以下から3〜5個だけ使う: ✋ 😴 🫧 🙋‍♀️ 🪽 🐑 💤 👀 🥰 🤩 ❓ ✨ 🔥 💆
+- 若い女性セラピストの口調（〜ですー、〜ませんか、〜してくださーい等）
+
+【冒頭フレーズの位置】
+冒頭フレーズ「{opening}」は必ず投稿の最初に配置すること。例：
+- 「関西の人で」+ 「ヘッドスパ受けたい人いませんかー？🙋‍♀️」のように繋げる
+- 「📍京都河原町駅から徒歩5分」+ 「70分3,980円で癒します🥰」のように繋げる
+- 「京都河原町で」+ 「寝落ちしませんか🐑💤」のように繋げる
+
+【参考にする過去の実投稿（冒頭フレーズを付けたバージョン）】
+- 関西の人でオイルマッサージ受けたい人✋私の手で癒させてくださーい😴🫧
+- 📍京都河原町駅から徒歩5分 70分3980円でヘッドスパ受けたい人いますかー？🙋‍♀️ 私が全力で施術させていただきます🪽
+- 京都河原町で寝落ち率95%のヘッドスパ受けたい人いませんか🤩❓
+- 京都の人で 70分3,980円ぽっきりでスッキリしませんか🥰
+- 四条河原町のすぐ近くでドライヘッドスパ¥3,980で受けたい人🙋‍♀️私の手で癒させてください✨
+
+【NG】
+- 冒頭フレーズなしの投稿（必ず先頭に「{opening}」が来ること）
+- 70文字を超える長文
+- 絵文字を6個以上使う
+- 説明的・冗長な文章
+
+【出力】
+投稿文1パターンのみ出力。説明・前置き・結びの言葉は絶対不要。"""
+
+    msg = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    text = msg.content[0].text.strip()
+    text = text.replace("「", "").replace("」", "")
+    text = text.replace("。", "").replace("、", " ")
+
+    if not text.startswith(opening):
+        text = opening + " " + text
+
+    return text
+
+def post_to_threads(text, media_url=None, media_type=None):
+    if media_type == "IMAGE":
+        params = {"media_type": "IMAGE", "image_url": media_url, "text": text, "access_token": ACCESS_TOKEN}
+    elif media_type == "VIDEO":
+        params = {"media_type": "VIDEO", "video_url": media_url, "text": text, "access_token": ACCESS_TOKEN}
+    else:
+        params = {"media_type": "TEXT", "text": text, "access_token": ACCESS_TOKEN}
+
+    r = requests.post(f"https://graph.threads.net/v1.0/{USER_ID}/threads", params=params)
+    if r.status_code != 200:
+        print(f"❌ コンテナ作成失敗: {r.text}")
+        if media_type:
+            print("📝 テキストのみで再試行")
+            return post_to_threads(text, None, None)
+        return r
+
+    cid = r.json().get("id")
+    print(f"✅ コンテナ作成: {cid}")
+
+    # 動画の場合はステータスをポーリング（最大5分）
+    if media_type == "VIDEO":
+        for i in range(30):
+            time.sleep(10)
+            try:
+                status_r = requests.get(
+                    f"https://graph.threads.net/v1.0/{cid}",
+                    params={"fields": "status,error_message", "access_token": ACCESS_TOKEN}
+                )
+                status_data = status_r.json()
+                status = status_data.get("status", "")
+                print(f"動画処理ステータス ({i+1}/30): {status}")
+                if status == "FINISHED":
+                    print("✅ 動画処理完了")
+                    break
+                if status == "ERROR":
+                    err_msg = status_data.get("error_message", "Unknown error")
+                    print(f"❌ 動画処理エラー: {err_msg}")
+                    print("📝 テキストのみで再試行")
+                    return post_to_threads(text, None, None)
+            except Exception as e:
+                print(f"ステータス確認エラー: {e}")
+        else:
+            print("⚠️ 動画処理タイムアウト（5分）、それでも公開を試みる")
+    else:
+        # 画像/テキストは短い待機でOK
+        wait_sec = 30 if media_type == "IMAGE" else 5
+        print(f"⏳ {wait_sec}秒待機...")
+        time.sleep(wait_sec)
+
+    return requests.post(
+        f"https://graph.threads.net/v1.0/{USER_ID}/threads_publish",
+        params={"creation_id": cid, "access_token": ACCESS_TOKEN}
+    )
+
+def is_rest_day_jp():
+    """水・木ならTrue（JST基準）"""
+    import datetime
+    today = (datetime.datetime.utcnow() + datetime.timedelta(hours=9)).date()
+    if today.weekday() in (2, 3):
+        print(f"😴 {today} は水・木なので投稿お休み")
+        return True
+    return False
+
+if not ACCESS_TOKEN or not USER_ID:
+    print("⚠️ Secrets未設定")
+    exit(1)
+
+if is_rest_day_jp():
+    exit(0)
+
+text = generate_post()
+print(f"📝 投稿文 ({len(text)}文字):\n{text}\n")
+
+media_url, media_type = get_media()
+if media_url:
+    print(f"🎬 MEDIA_CHOSEN: type={media_type} url={media_url}")
+else:
+    print("📄 メディアなし")
+
+r = post_to_threads(text, media_url, media_type)
+if r.status_code == 200:
+    print(f"✅ SUCCESS")
+else:
+    print(f"❌ FAILED: {r.status_code} {r.text}")
