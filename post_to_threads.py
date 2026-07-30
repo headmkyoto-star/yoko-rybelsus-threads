@@ -71,7 +71,7 @@ def get_media():
                 for f in files:
                     name = f["name"].lower()
                     if name.endswith((".mp4", ".mov")):
-                        url = GITHUB_RAW_BASE + "videos/" + f["name"].replace(" ", "_")
+                        url = GITHUB_RAW_BASE + "videos/" + requests.utils.quote(f["name"])
                         videos.append((url, "VIDEO"))
     except: pass
 
